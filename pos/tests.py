@@ -10,7 +10,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from io import StringIO
 from django.core.cache import cache
-from django.test import TestCase, Client, override_settings
+from django.test import TestCase, TransactionTestCase, Client, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -524,3 +524,75 @@ class DotenvLoaderTests(TestCase):
         from pathlib import Path
         from config.settings import _load_dotenv
         self.assertEqual(_load_dotenv(Path("/nonexistent/.env")), [])
+
+
+class DeploymentTests(Base):
+    def test_health_endpoint_reports_status_and_leaks_no_secrets(self):
+        with override_settings(CORS_ALLOWED_ORIGINS=["https://shop.vercel.app"], CORS_ALLOW_ALL_ORIGINS=False):
+            r = self.c.get("/api/health", HTTP_ORIGIN="https://shop.vercel.app")
+            self.assertEqual(r.status_code, 200)
+            d = r.json()
+            self.assertEqual((d["ok"], d["database"], d["migrations_pending"]), (True, "ok", 0))
+            self.assertEqual(d["cors_allowed_origins"], ["https://shop.vercel.app"])
+            self.assertTrue(d["this_origin_allowed"])
+            self.assertFalse(self.c.get("/api/health", HTTP_ORIGIN="https://evil.example").json()["this_origin_allowed"])
+        from django.conf import settings
+        for secret in (settings.SECRET_KEY, settings.EMAIL_HOST_PASSWORD or "no-password-set", "DATABASE_URL"):
+            self.assertNotIn(secret, r.content.decode())
+
+    def test_health_endpoint_is_not_rate_limited_or_authenticated(self):
+        for _ in range(15):
+            self.assertEqual(self.c.get("/api/health").status_code, 200)
+
+    def test_dashboard_origins_are_forgiving(self):
+        from config.settings import _origins
+        self.assertEqual(_origins(" https://a.vercel.app/ , b.vercel.app ,,http://localhost:5173"),
+                         ["https://a.vercel.app", "https://b.vercel.app", "http://localhost:5173"])
+        self.assertEqual(_origins(""), [])
+
+    def test_vercel_environment_is_safe_by_default(self):
+        code = ("import os,django;os.environ['DJANGO_SETTINGS_MODULE']='config.settings';django.setup();"
+                "from django.conf import settings as s;print(s.DEBUG, '.vercel.app' in s.ALLOWED_HOSTS)")
+        base = {k: v for k, v in os.environ.items() if k not in ("DJANGO_DEBUG", "DATABASE_URL")}
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True,
+                             env={**base, "VERCEL": "1", "PYTHONPATH": ".", "DJANGO_SECRET_KEY": "k8Jv2mPq9XrT5wZ1nB7cD3fG6hL0sA4yE8uI2oQ5tR9vW3xC"}).stdout.split()
+        self.assertEqual(out, ["False", "True"])        # debug OFF, any *.vercel.app host accepted
+        bad = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                             env={**base, "VERCEL": "1", "PYTHONPATH": ".", "DJANGO_SECRET_KEY": "change-this-in-production"})
+        self.assertNotEqual(bad.returncode, 0)          # refuses to start with a sample secret key
+        self.assertIn("DJANGO_SECRET_KEY", bad.stderr)
+
+
+class SafeCacheTests(TransactionTestCase):
+    """Run outside a wrapping transaction so a missing table behaves like it does in production."""
+
+    def make(self, name):
+        from pos.cache import SafeDatabaseCache
+        return SafeDatabaseCache(name, {})
+
+    def test_creates_its_own_table_when_missing(self):
+        from pos import cache as mod
+        mod._tried_to_create.discard("tmp_safe_cache_a")
+        c = self.make("tmp_safe_cache_a")
+        c.set("k", [1, 2, 3], 60)                 # the table does not exist yet - must not raise
+        self.assertEqual(c.get("k"), [1, 2, 3])   # ...and it works afterwards
+
+    def test_never_raises_even_if_the_table_cannot_be_created(self):
+        from unittest import mock
+        from pos import cache as mod
+        mod._tried_to_create.discard("tmp_safe_cache_b")
+        c = self.make("tmp_safe_cache_b")
+        with mock.patch("pos.cache.call_command", side_effect=RuntimeError("permission denied")):
+            self.assertEqual(c.get("k", "fallback"), "fallback")
+            c.set("k", 1)                         # silently skipped
+            self.assertFalse(c.add("k", 1))
+            self.assertFalse(c.has_key("k"))
+
+    def test_login_still_works_when_the_rate_limit_store_is_broken(self):
+        from unittest import mock
+        from pos import cache as mod
+        mod._tried_to_create.add("broken_tbl")
+        broken = {"default": {"BACKEND": "pos.cache.SafeDatabaseCache", "LOCATION": "broken_tbl"}}
+        with override_settings(CACHES=broken), mock.patch("pos.cache.call_command", side_effect=RuntimeError("x")):
+            r = APIClient().post("/api/auth/login", {"email": "x@y.com", "password": "bad"}, format="json")
+        self.assertEqual((r.status_code, r.json()["error"]), (401, "invalid_credentials"))   # was HTTP 500 before

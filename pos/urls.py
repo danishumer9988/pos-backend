@@ -5,6 +5,7 @@ from .views import (
     CategoryListCreateView, CategoryDetailView, ProductListCreateView, ProductDetailView,
     DashboardView, DemoRequestView,
 )
+from .health import HealthView
 from .views_sales import (
     OrderListCreateView, OrderDetailView, CustomerListCreateView, CustomerDetailView,
     AnalyticsView, FinanceView, BusinessProfileView, StockAdjustView, StockMovementListView,
@@ -29,6 +30,7 @@ urlpatterns = [
     path("me/products/<uuid:pk>", ProductDetailView.as_view()),
     path("me/dashboard", DashboardView.as_view()),
     path("demo-requests", DemoRequestView.as_view()),
+    path("health", HealthView.as_view()),
     path("me/orders", OrderListCreateView.as_view()),
     path("me/orders/<uuid:pk>", OrderDetailView.as_view()),
     path("me/customers", CustomerListCreateView.as_view()),

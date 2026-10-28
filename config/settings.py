@@ -41,6 +41,16 @@ if not DEBUG and (SECRET_KEY == _DEV_KEY or "change" in SECRET_KEY.lower() or "i
     from django.core.exceptions import ImproperlyConfigured
     raise ImproperlyConfigured("Set DJANGO_SECRET_KEY to a long random value (32+ characters) before running with DEBUG off.")
 
+
+def _origins(raw):
+    """Website addresses typed into a dashboard field: forgive spaces, a trailing / and a missing https://."""
+    out = []
+    for x in raw.split(","):
+        x = x.strip().rstrip("/")
+        if x:
+            out.append(x if "://" in x else f"https://{x}")
+    return out
+
 ALLOWED_HOSTS = [x.strip() for x in os.getenv(
     "ALLOWED_HOSTS", "127.0.0.1,localhost"
 ).split(",") if x.strip()]
@@ -52,8 +62,10 @@ ALLOWED_HOSTS += [
         os.getenv("VERCEL_PROJECT_PRODUCTION_URL")
     ) if h
 ]
+if os.getenv("VERCEL"):
+    ALLOWED_HOSTS.append(".vercel.app")
 # Needed for the /admin login when the backend is served on https from another domain.
-CSRF_TRUSTED_ORIGINS = [x.strip() for x in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if x.strip()]
+CSRF_TRUSTED_ORIGINS = _origins(os.getenv("CSRF_TRUSTED_ORIGINS", ""))
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -117,7 +129,7 @@ if DATABASE_URL:
     }
     # Serverless instances don't share memory, so rate limits (login/OTP) need a shared store.
     # Create its table once with:  python manage.py createcachetable
-    CACHES = {"default": {"BACKEND": "django.core.cache.backends.db.DatabaseCache", "LOCATION": "django_cache"}}
+    CACHES = {"default": {"BACKEND": "pos.cache.SafeDatabaseCache", "LOCATION": "django_cache"}}
 else:
     DATABASES = {
         "default": {
@@ -149,11 +161,7 @@ REST_FRAMEWORK = {
     ],
 }
 
-CORS_ALLOWED_ORIGINS = [
-    x.strip() for x in os.getenv(
-        "CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000"
-    ).split(",") if x.strip()
-]
+CORS_ALLOWED_ORIGINS = _origins(os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000"))
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_ALL_ORIGINS = DEBUG  # dev convenience: any localhost port works
 
