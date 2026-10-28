@@ -1,0 +1,7 @@
+# Keep the backend deployment small: the React app is deployed as its own Vercel project.
+frontend
+node_modules
+db.sqlite3
+.env
+.venv
+*.md
