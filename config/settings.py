@@ -37,9 +37,20 @@ SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", _DEV_KEY)
 # On Vercel (it sets VERCEL=1) debug is OFF unless you explicitly turn it on.
 DEBUG = os.getenv("DJANGO_DEBUG", "False" if os.getenv("VERCEL") else "True").lower() == "true"
 
-if not DEBUG and (SECRET_KEY == _DEV_KEY or "change" in SECRET_KEY.lower() or "insecure" in SECRET_KEY.lower() or len(SECRET_KEY) < 32):
+if not DEBUG:
+    # Fail early (and say exactly why) instead of running a public site with a guessable key.
     from django.core.exceptions import ImproperlyConfigured
-    raise ImproperlyConfigured("Set DJANGO_SECRET_KEY to a long random value (32+ characters) before running with DEBUG off.")
+    _where = f" This deployment's Vercel environment is '{os.getenv('VERCEL_ENV')}'." if os.getenv("VERCEL_ENV") else ""
+    if not os.getenv("DJANGO_SECRET_KEY", "").strip():
+        raise ImproperlyConfigured(
+            "DJANGO_SECRET_KEY is NOT SET." + _where + " Vercel: Project > Settings > Environment Variables > add "
+            "DJANGO_SECRET_KEY, tick Production, Preview and Development, then Redeploy.")
+    if "change" in SECRET_KEY.lower() or "insecure" in SECRET_KEY.lower():
+        raise ImproperlyConfigured(
+            "DJANGO_SECRET_KEY is a SAMPLE value (it contains 'change' or 'insecure'). Replace it with a real random key: "
+            "python -c \"import secrets; print(secrets.token_urlsafe(60))\"")
+    if len(SECRET_KEY) < 32:
+        raise ImproperlyConfigured(f"DJANGO_SECRET_KEY is only {len(SECRET_KEY)} characters long; it needs at least 32.")
 
 
 def _origins(raw):

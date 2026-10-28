@@ -560,7 +560,17 @@ class DeploymentTests(Base):
         bad = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                              env={**base, "VERCEL": "1", "PYTHONPATH": ".", "DJANGO_SECRET_KEY": "change-this-in-production"})
         self.assertNotEqual(bad.returncode, 0)          # refuses to start with a sample secret key
-        self.assertIn("DJANGO_SECRET_KEY", bad.stderr)
+        self.assertIn("SAMPLE value", bad.stderr)
+        def fail(**env):
+            r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                               env={**base, "VERCEL": "1", "PYTHONPATH": ".", **env})
+            self.assertNotEqual(r.returncode, 0)
+            return r.stderr
+        self.assertIn("NOT SET", fail(DJANGO_SECRET_KEY="", VERCEL_ENV="preview"))        # says which environment
+        self.assertIn("'preview'", fail(DJANGO_SECRET_KEY="", VERCEL_ENV="preview"))
+        self.assertIn("NOT SET", fail())                                                  # variable missing entirely
+        self.assertIn("only 10 characters", fail(DJANGO_SECRET_KEY="abcdefghij"))
+        self.assertNotIn("abcdefghij", fail(DJANGO_SECRET_KEY="abcdefghij").replace("only 10 characters", ""))  # never echoes the key
 
 
 class SafeCacheTests(TransactionTestCase):
