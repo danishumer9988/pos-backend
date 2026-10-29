@@ -122,32 +122,30 @@ WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+if not DATABASE_URL:
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured(
+        "DATABASE_URL is NOT SET. This project uses PostgreSQL only (no SQLite). "
+        "Set DATABASE_URL to your Neon/Postgres connection string "
+        "(Vercel: Project > Settings > Environment Variables; locally: put it in backend/.env).")
 
-if DATABASE_URL:
-    u = urlparse(DATABASE_URL)
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.postgresql",
-            "NAME": unquote(u.path.lstrip("/")),
-            "USER": unquote(u.username or ""),
-            "PASSWORD": unquote(u.password or ""),   # passwords with @ : / % arrive percent-encoded
-            "HOST": u.hostname or "",
-            "PORT": str(u.port or 5432),
-            "OPTIONS": {"sslmode": os.getenv("DB_SSLMODE", "require")},
-            "CONN_MAX_AGE": 0,                      # serverless: don't keep connections between requests
-            "DISABLE_SERVER_SIDE_CURSORS": True,    # required by pooled connections (Neon "-pooler" URLs)
-        }
+u = urlparse(DATABASE_URL)
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": unquote(u.path.lstrip("/")),
+        "USER": unquote(u.username or ""),
+        "PASSWORD": unquote(u.password or ""),   # passwords with @ : / % arrive percent-encoded
+        "HOST": u.hostname or "",
+        "PORT": str(u.port or 5432),
+        "OPTIONS": {"sslmode": os.getenv("DB_SSLMODE", "require")},
+        "CONN_MAX_AGE": 0,                      # serverless: don't keep connections between requests
+        "DISABLE_SERVER_SIDE_CURSORS": True,    # required by pooled connections (Neon "-pooler" URLs)
     }
-    # Serverless instances don't share memory, so rate limits (login/OTP) need a shared store.
-    # Create its table once with:  python manage.py createcachetable
-    CACHES = {"default": {"BACKEND": "pos.cache.SafeDatabaseCache", "LOCATION": "django_cache"}}
-else:
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "db.sqlite3",
-        }
-    }
+}
+# Serverless instances don't share memory, so rate limits (login/OTP) need a shared store.
+# Create its table once with:  python manage.py createcachetable
+CACHES = {"default": {"BACKEND": "pos.cache.SafeDatabaseCache", "LOCATION": "django_cache"}}
 
 AUTH_USER_MODEL = "pos.User"
 
